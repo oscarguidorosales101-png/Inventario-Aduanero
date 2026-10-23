@@ -33,36 +33,44 @@ export default function ConfiguracionPage() {
     performHealthCheck();
   }, []);
 
+  const isBackendUp = healthStatus?.status === 'online' || isLiveBackend;
+  const isPostgresUp = healthStatus?.postgres === 'connected' || (isLiveBackend && healthStatus?.postgres !== 'disconnected');
+  const isN8nUp = healthStatus?.n8n === 'online';
+
   const components = [
     {
       name: 'Frontend Web (React + Vite)',
       type: 'Cliente SPA',
       status: 'online',
-      description: 'Interfaz administrativa con identidad rojo elegante, sistema de diseño, 10 vistas y enrutador React Router.',
+      description: 'Interfaz administrativa con identidad blanco y rojo elegante, 10 módulos operativos y enrutador React Router.',
       details: 'Vite 8 · React 19 · Lucide React'
     },
     {
       name: 'API Backend (Node.js / Express)',
       type: 'Servidor REST',
-      status: isLiveBackend ? 'online' : 'offline',
-      description: isLiveBackend
-        ? 'Servidor API respondiendo en puerto configurado con pool pg y rutas normalizadas.'
-        : 'Backend en espera para Fase 2/3. El frontend funciona actualmente en modo demostración local seguro.',
-      details: 'Puerto sugerido: 5000 · CORS habilitado'
+      status: isBackendUp ? 'online' : 'offline',
+      description: isBackendUp
+        ? 'Servidor API Express activo en http://localhost:5000 con pool pg, CORS y endpoints parametrizados.'
+        : 'Backend en espera. Inicia el servidor con "npm run server" en la carpeta del proyecto.',
+      details: 'Puerto: 5000 · CORS habilitado · Pool PostgreSQL'
     },
     {
       name: 'Base de Datos (PostgreSQL 17)',
       type: 'SGBD Relacional',
-      status: isLiveBackend ? 'online' : 'standby',
-      description: 'Esquema relacional de 13 tablas (DUA, Mercancías, Bodegas, Contenedores, Inspecciones, etc.) conforme a Laboratorio #3.',
-      details: 'Servidor local PostgreSQL · Puerto 5432'
+      status: isPostgresUp ? 'online' : 'standby',
+      description: isPostgresUp
+        ? 'Conexión activa a la base "aduana" con las 13 tablas pobladas del Laboratorio #3 e integridad referencial.'
+        : 'Verificando servicio local de PostgreSQL en el puerto 5432.',
+      details: 'Base: aduana · Puerto: 5432 · Rol IA: agente_aduanero_ro'
     },
     {
       name: 'Automatización & Agente IA (n8n)',
       type: 'Workflow Engine',
-      status: 'standby',
-      description: 'Flujo con nodo Webhook, AI Agent y LLM (Gemini / DeepSeek) para consultas aduaneras en lenguaje natural.',
-      details: 'Puerto estándar: 5678 · Webhook /aduanas-ai'
+      status: isN8nUp ? 'online' : 'standby',
+      description: isN8nUp
+        ? 'Workflow de n8n activo y conectado al webhook /aduanas-ai con Gemini y PostgreSQL.'
+        : 'Workflow registrado (AduanaGemini2026). Inicia n8n para enlazar el webhook en vivo; el backend procesa consultas con el agente PostgreSQL RO.',
+      details: 'Workflow: AduanaGemini2026 · Webhook: /webhook/aduanas-ai'
     }
   ];
 

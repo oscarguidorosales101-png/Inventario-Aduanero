@@ -1,0 +1,247 @@
+{
+  "name": "Inventario Aduanero - Agente IA con Gemini y PostgreSQL",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aduanas-ai",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "webhook-aduanas-ai",
+      "name": "Webhook de Entrada"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validar y normalizar la pregunta recibida del backend\nconst body = $json.body || $json;\nconst question = body.question || body.text || '';\n\nif (!question || question.trim() === '') {\n  return [{\n    json: {\n      error: true,\n      message: 'La pregunta no puede estar vacía.',\n      question: ''\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    question: question.trim(),\n    history: body.history || [],\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "code-validate-request",
+      "name": "Validar Solicitud"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.question }}",
+        "options": {
+          "systemMessage": "Eres el Asistente Oficial de Inteligencia Artificial para el Sistema de Inventario Aduanero (Laboratorio #3).\nTu objetivo es responder preguntas de los funcionarios sobre operaciones aduaneras consultando los datos reales de PostgreSQL.\n\nESQUEMA DE BASE DE DATOS (13 TABLAS):\n1. pais (id_pais, nombre, codigo_iso)\n2. importador (id_importador, nombre_razon_social, nit_ruc, direccion, telefono, correo)\n3. agente_aduanal (id_agente, nombre, licencia, telefono)\n4. categoria_partida (id_categoria, codigo_partida, descripcion, porcentaje_arancel)\n5. mercancia (id_mercancia, descripcion, unidad_medida, valor_unitario, id_categoria)\n6. declaracion_aduanera (id_declaracion, numero_declaracion, fecha, regimen, estado, id_importador, id_agente, id_pais_origen)\n7. detalle_declaracion (id_detalle, id_declaracion, id_mercancia, cantidad, valor_declarado)\n8. contenedor (id_contenedor, numero_contenedor, tipo, peso, id_declaracion)\n9. bodega (id_bodega, nombre, ubicacion, capacidad)\n10. inventario_bodega (id_inventario, id_bodega, id_mercancia, cantidad, fecha_ingreso, estado)\n11. movimiento_inventario (id_movimiento, tipo, fecha, cantidad, id_mercancia, id_bodega, motivo)\n12. funcionario (id_funcionario, nombre, cargo, id_supervisor)\n13. inspeccion (id_inspeccion, fecha, resultado, observaciones, id_declaracion, id_funcionario)\n\nREGLAS DE SEGURIDAD ESTRICTAS:\n- Solo consulta información mediante operaciones de lectura (SELECT).\n- Nunca intentes modificar, insertar ni eliminar datos.\n- Si no encuentras registros, aclara que no existen datos que cumplan el criterio en la base de datos aduanera.\n- No inventes números de declaración, productos ni cantidades que no provengan de las herramientas.\n- Responde de forma clara, profesional y con formato markdown estructurado."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        460,
+        0
+      ],
+      "id": "agent-aduanas-ai",
+      "name": "AI Agent Aduanas"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-1.5-flash",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        420,
+        200
+      ],
+      "id": "gemini-chat-model",
+      "name": "Google Gemini Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "mBv8zARgfcu2cMwI",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5000/api/declaraciones",
+        "toolDescription": "Consulta el listado oficial de declaraciones aduaneras (DUA), incluyendo número DUA, fecha, régimen, estado, importador y país de origen.",
+        "placeholderDefinitions": {
+          "values": []
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        620,
+        200
+      ],
+      "id": "tool-consulta-declaraciones",
+      "name": "Tool Consultar Declaraciones"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5000/api/inventario",
+        "toolDescription": "Consulta las existencias actuales de mercancías en las bodegas fiscales, incluyendo estado de custodia (Retenido, Liberado, En Cuarentena) y cantidades.",
+        "placeholderDefinitions": {
+          "values": []
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        200
+      ],
+      "id": "tool-consulta-inventario",
+      "name": "Tool Consultar Inventario"
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:5000/api/inspecciones",
+        "toolDescription": "Consulta las actas de inspección física y aforo técnico aduanero, resultado (Aprobada, Con Observaciones, Retenida) y el funcionario asignado.",
+        "placeholderDefinitions": {
+          "values": []
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        940,
+        200
+      ],
+      "id": "tool-consulta-inspecciones",
+      "name": "Tool Consultar Inspecciones"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatear respuesta para el backend y frontend de React\nconst agentOutput = $json.output || $json.text || '';\n\nreturn [{\n  json: {\n    answer: agentOutput,\n    source: 'n8n Agente IA (Gemini 1.5 Flash + PostgreSQL)',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ],
+      "id": "code-format-response",
+      "name": "Formatear Respuesta"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1020,
+        0
+      ],
+      "id": "respond-to-webhook",
+      "name": "Responder a Webhook"
+    }
+  ],
+  "connections": {
+    "Webhook de Entrada": {
+      "main": [
+        [
+          {
+            "node": "Validar Solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Solicitud": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Aduanas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Aduanas",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Consultar Declaraciones": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Aduanas",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Consultar Inventario": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Aduanas",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tool Consultar Inspecciones": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Aduanas",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Aduanas": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta": {
+      "main": [
+        [
+          {
+            "node": "Responder a Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

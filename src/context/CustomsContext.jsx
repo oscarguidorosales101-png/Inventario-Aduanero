@@ -21,7 +21,6 @@ export function CustomsProvider({ children }) {
   const [agentes, setAgentes] = useState([]);
   const [paises, setPaises] = useState([]);
   const [funcionarios, setFuncionarios] = useState([]);
-  const [detalles, setDetalles] = useState([]);
 
   // Notificación tipo toast
   const showToast = (message, type = 'success') => {
@@ -44,8 +43,7 @@ export function CustomsProvider({ children }) {
         impsRes,
         agtsRes,
         paissRes,
-        funcsRes,
-        detsRes
+        funcsRes
       ] = await Promise.all([
         apiService.getDeclaraciones(),
         apiService.getMercancias(),
@@ -58,8 +56,7 @@ export function CustomsProvider({ children }) {
         apiService.getImportadores(),
         apiService.getAgentes(),
         apiService.getPaises(),
-        apiService.getFuncionarios(),
-        apiService.getDetallesDeclaracion()
+        apiService.getFuncionarios()
       ]);
 
       setDeclaraciones(decsRes.data || []);
@@ -74,12 +71,12 @@ export function CustomsProvider({ children }) {
       setAgentes(agtsRes.data || []);
       setPaises(paissRes.data || []);
       setFuncionarios(funcsRes.data || []);
-      setDetalles(detsRes.data || []);
 
-      setIsLiveBackend(connectionStatus.isLiveBackend);
+      const health = await apiService.checkHealth();
+      setIsLiveBackend(health.status === 'online');
     } catch (err) {
       console.error('Error cargando datos aduaneros:', err);
-      showToast('Error cargando datos del sistema', 'error');
+      showToast('Error conectando a los servicios de la base de datos', 'error');
     } finally {
       setLoading(false);
     }
@@ -89,49 +86,58 @@ export function CustomsProvider({ children }) {
     loadAllData();
   }, []);
 
-  // Operaciones de negocio en el frontend
-  const addDeclaracion = (newDua) => {
-    const id = declaraciones.length > 0 ? Math.max(...declaraciones.map(d => d.id_declaracion)) + 1 : 1;
-    const duaCompleta = { ...newDua, id_declaracion: id };
-    setDeclaraciones([duaCompleta, ...declaraciones]);
-    showToast(`Declaración ${duaCompleta.numero_declaracion} registrada correctamente`);
-  };
-
-  const updateDeclaracionEstado = (id, nuevoEstado) => {
-    setDeclaraciones(prev => prev.map(d => d.id_declaracion === id ? { ...d, estado: nuevoEstado } : d));
-    showToast(`Estado de declaración actualizado a "${nuevoEstado}"`);
-  };
-
-  const addMovimientoInventario = (mov) => {
-    const id = movimientos.length > 0 ? Math.max(...movimientos.map(m => m.id_movimiento)) + 1 : 1;
-    const fechaActual = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const nuevoMov = { ...mov, id_movimiento: id, fecha: fechaActual };
-    setMovimientos([nuevoMov, ...movimientos]);
-
-    // Actualizar existencias en inventario_bodega
-    setInventario(prev => {
-      const idx = prev.findIndex(item => item.id_bodega === Number(mov.id_bodega) && item.id_mercancia === Number(mov.id_mercancia));
-      if (idx !== -1) {
-        const itemActual = prev[idx];
-        const delta = mov.tipo === 'Salida' ? -Number(mov.cantidad) : Number(mov.cantidad);
-        const nuevaCant = Math.max(0, itemActual.cantidad + delta);
-        const updated = [...prev];
-        updated[idx] = { ...itemActual, cantidad: nuevaCant };
-        return updated;
-      } else if (mov.tipo === 'Entrada') {
-        return [...prev, {
-          id_inventario: prev.length + 1,
-          id_bodega: Number(mov.id_bodega),
-          id_mercancia: Number(mov.id_mercancia),
-          cantidad: Number(mov.cantidad),
-          fecha_ingreso: fechaActual.substring(0, 10),
-          estado: 'Retenido'
-        }];
+  // Operaciones de negocio conectadas al Backend REST y PostgreSQL
+  const addDeclaracion = async (newDua) => {
+    try {
+      const res = await apiService.createDeclaracion(newDua);
+      if (res.data) {
+        setDeclaraciones(prev => [res.data, ...prev]);
+        showToast(`Declaración ${newDua.numero_declaracion} guardada en PostgreSQL.`);
+      } else {
+        // En caso de modo desconectado local
+        const id = declaraciones.length > 0 ? Math.max(...declaraciones.map(d => d.id_declaracion)) + 1 : 1;
+        setDeclaraciones(prev => [{ ...newDua, id_declaracion: id }, ...prev]);
+        showToast(`Declaración registrada localmente.`);
       }
-      return prev;
-    });
+    } catch (err) {
+      showToast(`Error guardando declaración: ${err.message}`, 'error');
+    }
+  };
 
-    showToast(`Movimiento de ${mov.tipo} registrado con éxito`);
+  const updateDeclaracionEstado = async (id, nuevoEstado) => {
+    try {
+      const res = await apiService.updateDeclaracionEstado(id, nuevoEstado);
+      if (res.data) {
+        setDeclaraciones(prev => prev.map(d => d.id_declaracion === id ? { ...d, estado: nuevoEstado } : d));
+        showToast(`Estado actualizado a "${nuevoEstado}" en PostgreSQL.`);
+      } else {
+        setDeclaraciones(prev => prev.map(d => d.id_declaracion === id ? { ...d, estado: nuevoEstado } : d));
+        showToast(`Estado actualizado localmente a "${nuevoEstado}".`);
+      }
+    } catch (err) {
+      showToast(`Error actualizando estado: ${err.message}`, 'error');
+    }
+  };
+
+  const addMovimientoInventario = async (mov) => {
+    try {
+      const res = await apiService.createMovimiento(mov);
+      if (res.data) {
+        setMovimientos(prev => [res.data, ...prev]);
+        // Refrescar inventario para reflejar el cambio transaccional de PostgreSQL
+        const invRes = await apiService.getInventario();
+        if (invRes.data) setInventario(invRes.data);
+        showToast(`Movimiento de ${mov.tipo} registrado en PostgreSQL con ajuste de stock.`);
+      } else {
+        // Fallback local
+        const id = movimientos.length > 0 ? Math.max(...movimientos.map(m => m.id_movimiento)) + 1 : 1;
+        const fechaActual = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        setMovimientos(prev => [{ ...mov, id_movimiento: id, fecha: fechaActual }, ...prev]);
+        showToast(`Movimiento registrado localmente.`);
+      }
+    } catch (err) {
+      showToast(`Error registrando movimiento: ${err.message}`, 'error');
+    }
   };
 
   return (
@@ -155,7 +161,6 @@ export function CustomsProvider({ children }) {
         agentes,
         paises,
         funcionarios,
-        detalles,
         // Acciones
         addDeclaracion,
         updateDeclaracionEstado,

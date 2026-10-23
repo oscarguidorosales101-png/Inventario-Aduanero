@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart3,
   Code2,
@@ -8,10 +8,14 @@ import {
   Check,
   Copy,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Database,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { useCustoms } from '../context/CustomsContext';
 import { mockConsultasLaboratorio } from '../data/mockData';
+import { apiService } from '../services/api';
 import Badge from '../components/common/Badge';
 
 export default function InformesPage() {
@@ -22,223 +26,349 @@ export default function InformesPage() {
     mercancias,
     bodegas,
     importadores,
-    agentes,
     paises,
     inspecciones,
-    movimientos,
-    showToast
+    funcionarios,
+    showToast,
+    isLiveBackend
   } = useCustoms();
 
   const [selectedConsultaId, setSelectedConsultaId] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [liveResult, setLiveResult] = useState(null);
+  const [queryError, setQueryError] = useState(null);
 
   const selectedConsulta = mockConsultasLaboratorio.find(c => c.id === selectedConsultaId);
 
+  // Cargar datos reales desde PostgreSQL al seleccionar consulta o cambiar modo
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchReportData() {
+      setLoading(true);
+      setQueryError(null);
+      try {
+        const data = await apiService.getInforme(selectedConsultaId);
+        if (isMounted) {
+          if (data && data.rows) {
+            setLiveResult(data);
+          } else {
+            setLiveResult(null);
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          setQueryError(err.message || 'Error al ejecutar consulta en PostgreSQL');
+          setLiveResult(null);
+        }
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    fetchReportData();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedConsultaId, isLiveBackend]);
+
+  const currentSQL = liveResult?.sql || selectedConsulta?.sqlQuery || '';
+
   const handleCopySQL = () => {
-    if (selectedConsulta) {
-      navigator.clipboard.writeText(selectedConsulta.sqlQuery);
+    if (currentSQL) {
+      navigator.clipboard.writeText(currentSQL);
       setCopied(true);
       showToast('Sentencia SQL copiada al portapapeles');
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  // Ejecución dinámica de las 8 consultas analíticas sobre los datos actuales
+  const handleExportCSV = () => {
+    const rows = liveResult?.rows;
+    if (!rows || rows.length === 0) {
+      showToast('No hay datos disponibles para exportar');
+      return;
+    }
+    const headers = Object.keys(rows[0]).join(',');
+    const csvContent = [
+      headers,
+      ...rows.map(r => Object.values(r).map(val => `"${val !== null ? val : ''}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `informe_aduanero_consulta_${selectedConsultaId}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`Informe #${selectedConsultaId} exportado en CSV`);
+  };
+
+  // Renderizar los resultados de PostgreSQL o el fallback local
   const renderQueryResult = () => {
-    switch (selectedConsultaId) {
-      case 1: {
-        // DUAs por mes y régimen
-        const map = {};
-        declaraciones.forEach(d => {
-          const mes = d.fecha.substring(0, 7);
-          const key = `${mes}__${d.regimen}`;
-          map[key] = (map[key] || 0) + 1;
-        });
+    if (loading) {
+      return (
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
+          <Loader2 className="spin" size={28} style={{ color: 'var(--primary)', marginBottom: 12, margin: '0 auto' }} />
+          <p style={{ fontWeight: 600, fontSize: 14 }}>Ejecutando consulta en PostgreSQL...</p>
+        </div>
+      );
+    }
 
-        const rows = Object.entries(map).map(([key, count]) => {
-          const [mes, regimen] = key.split('__');
-          return { mes, regimen, total: count };
-        }).sort((a, b) => b.total - a.total);
+    if (queryError) {
+      return (
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--status-danger)' }}>
+          <AlertCircle size={32} style={{ marginBottom: 8, margin: '0 auto' }} />
+          <p style={{ fontWeight: 700 }}>No fue posible obtener los datos de la base de datos</p>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>{queryError}</p>
+        </div>
+      );
+    }
 
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Mes del Registro</th>
-                <th>Régimen Aduanero</th>
-                <th>Total de Declaraciones (DUA)</th>
-                <th>Participación Relativa</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{r.mes}</td>
-                  <td><Badge status={r.regimen} /></td>
-                  <td style={{ fontWeight: 800, fontSize: 16 }}>{r.total}</td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ flex: 1, height: 6, backgroundColor: 'var(--bg-surface-alt)', borderRadius: 99 }}>
-                        <div style={{ width: `${(r.total / declaraciones.length) * 100}%`, height: '100%', backgroundColor: 'var(--primary)', borderRadius: 99 }}></div>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700 }}>{Math.round((r.total / declaraciones.length) * 100)}%</span>
-                    </div>
-                  </td>
+    // Si tenemos filas reales de PostgreSQL, las mostramos
+    if (liveResult && Array.isArray(liveResult.rows) && liveResult.rows.length > 0) {
+      const rows = liveResult.rows;
+
+      switch (selectedConsultaId) {
+        case 1:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Mes del Registro</th>
+                  <th>Régimen Aduanero</th>
+                  <th>Total de Declaraciones (DUA)</th>
+                  <th>Proporción Visual</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        );
-      }
-
-      case 2: {
-        // Mercancías retenidas
-        const retenidas = inventario.filter(i => i.estado === 'Retenido');
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Bodega Fiscal</th>
-                <th>Mercancía Retenida</th>
-                <th>Cantidad en Custodia</th>
-                <th>Fecha Ingreso</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {retenidas.map((item, i) => {
-                const b = bodegas.find(bd => bd.id_bodega === item.id_bodega);
-                const m = mercancias.find(me => me.id_mercancia === item.id_mercancia);
-                return (
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
                   <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{b ? b.nombre : 'N/A'}</td>
-                    <td>{m ? m.descripcion : 'N/A'}</td>
-                    <td style={{ fontWeight: 800, color: 'var(--status-danger)', fontSize: 15 }}>
-                      {item.cantidad.toLocaleString()} {m?.unidad_medida}
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{r.mes}</td>
+                    <td><Badge status={r.regimen} /></td>
+                    <td style={{ fontWeight: 800, fontSize: 16 }}>{r.total_declaraciones}</td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ flex: 1, height: 6, backgroundColor: 'var(--bg-surface-alt)', borderRadius: 99 }}>
+                          <div style={{ width: `${Math.min(100, (Number(r.total_declaraciones) / 16) * 100)}%`, height: '100%', backgroundColor: 'var(--primary)', borderRadius: 99 }}></div>
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700 }}>{r.total_declaraciones} DUAs</span>
+                      </div>
                     </td>
-                    <td>{item.fecha_ingreso}</td>
-                    <td><Badge status={item.estado} /></td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        );
-      }
+                ))}
+              </tbody>
+            </table>
+          );
 
-      case 3: {
-        // Países con más contenedores
-        const paisMap = {};
-        contenedores.forEach(c => {
-          const dua = declaraciones.find(d => d.id_declaracion === c.id_declaracion);
-          const p = dua ? paises.find(pa => pa.id_pais === dua.id_pais_origen) : null;
-          const paisNombre = p ? p.nombre : 'Desconocido';
-          if (!paisMap[paisNombre]) {
-            paisMap[paisNombre] = { contenedores: 0, pesoTotal: 0, iso: p?.codigo_iso || '--' };
-          }
-          paisMap[paisNombre].contenedores += 1;
-          paisMap[paisNombre].pesoTotal += Number(c.peso || 0);
-        });
-
-        const rows = Object.entries(paisMap).sort((a, b) => b[1].contenedores - a[1].contenedores);
-
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>País de Procedencia</th>
-                <th>Código ISO</th>
-                <th>Total Contenedores</th>
-                <th>Peso Acumulado (kg)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(([nombre, val], i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 700 }}>{nombre}</td>
-                  <td><span className="table-code-badge">{val.iso}</span></td>
-                  <td style={{ fontWeight: 800, fontSize: 16, color: 'var(--primary)' }}>{val.contenedores}</td>
-                  <td style={{ fontWeight: 600 }}>{val.pesoTotal.toLocaleString()} kg</td>
+        case 2:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Bodega Fiscal</th>
+                  <th>Mercancía Retenida</th>
+                  <th>Partida Arancelaria</th>
+                  <th>Cantidad en Custodia</th>
+                  <th>Fecha Ingreso</th>
+                  <th>Estado</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        );
-      }
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{r.bodega}</td>
+                    <td>{r.mercancia}</td>
+                    <td><span className="table-code-badge">{r.codigo_partida}</span></td>
+                    <td style={{ fontWeight: 800, color: 'var(--status-danger)', fontSize: 15 }}>
+                      {Number(r.cantidad).toLocaleString()}
+                    </td>
+                    <td>{r.fecha_ingreso}</td>
+                    <td><Badge status={r.estado} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
 
-      case 4: {
-        // Ranking de importadores por valor declarado
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Importador / Razón Social</th>
-                <th>NIT / RUC</th>
-                <th>DUAs Gestionadas</th>
-                <th>Valor Total Declarado (USD)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {importadores.map(imp => {
-                const suas = declaraciones.filter(d => d.id_importador === imp.id_importador);
-                const valorAprox = suas.length * 85000 + (imp.id_importador * 12400);
-                return (
-                  <tr key={imp.id_importador}>
-                    <td style={{ fontWeight: 600 }}>{imp.nombre_razon_social}</td>
-                    <td><span className="table-code-badge">{imp.nit_ruc}</span></td>
-                    <td style={{ fontWeight: 700 }}>{suas.length}</td>
+        case 3:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>País de Procedencia</th>
+                  <th>Código ISO</th>
+                  <th>Total Contenedores</th>
+                  <th>Peso Acumulado (kg)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 700 }}>{r.pais}</td>
+                    <td><span className="table-code-badge">{r.codigo_iso}</span></td>
+                    <td style={{ fontWeight: 800, fontSize: 16, color: 'var(--primary)' }}>{r.total_contenedores}</td>
+                    <td style={{ fontWeight: 600 }}>{Number(r.peso_total_kg).toLocaleString(undefined, { minimumFractionDigits: 2 })} kg</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+
+        case 4:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Importador / Razón Social</th>
+                  <th>NIT / RUC</th>
+                  <th>DUAs Gestionadas</th>
+                  <th>Valor Total Declarado (USD)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{r.nombre_razon_social}</td>
+                    <td><span className="table-code-badge">{r.nit_ruc}</span></td>
+                    <td style={{ fontWeight: 700 }}>{r.total_duas}</td>
                     <td style={{ fontWeight: 800, color: 'var(--primary)', fontSize: 15 }}>
-                      ${valorAprox.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      ${Number(r.valor_total_usd).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        );
-      }
+                ))}
+              </tbody>
+            </table>
+          );
 
-      case 5: {
-        // Inspecciones con observaciones
-        const obs = inspecciones.filter(i => i.resultado !== 'Aprobada');
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>DUA</th>
-                <th>Resultado</th>
-                <th>Inspector Oficial</th>
-                <th>Observaciones Registradas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {obs.map(item => {
-                const dua = declaraciones.find(d => d.id_declaracion === item.id_declaracion);
-                const f = funcionarios.find(fn => fn.id_funcionario === item.id_funcionario);
-                return (
-                  <tr key={item.id_inspeccion}>
-                    <td>{item.fecha}</td>
-                    <td><span className="table-code-badge">{dua ? dua.numero_declaracion : 'N/A'}</span></td>
-                    <td><Badge status={item.resultado} /></td>
-                    <td style={{ fontWeight: 600 }}>{f ? f.nombre : 'N/A'}</td>
-                    <td>{item.observaciones}</td>
+        case 5:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>DUA Asociada</th>
+                  <th>Resultado</th>
+                  <th>Funcionario Inspector</th>
+                  <th>Observaciones Registradas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.fecha}</td>
+                    <td><span className="table-code-badge">{r.numero_declaracion}</span></td>
+                    <td><Badge status={r.resultado} /></td>
+                    <td style={{ fontWeight: 600 }}>
+                      <div>{r.funcionario_inspector}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.cargo}</div>
+                    </td>
+                    <td style={{ maxWidth: 300 }}>{r.observaciones}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        );
-      }
+                ))}
+              </tbody>
+            </table>
+          );
 
-      default: {
-        return (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
-            Selecciona una consulta del listado para ejecutar y visualizar los resultados analíticos.
-          </div>
-        );
+        case 6:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Mercancía</th>
+                  <th>Partida</th>
+                  <th>Unidad</th>
+                  <th>Stock Total</th>
+                  <th>Liberado</th>
+                  <th>Retenido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{r.descripcion}</td>
+                    <td><span className="table-code-badge">{r.codigo_partida}</span></td>
+                    <td>{r.unidad_medida}</td>
+                    <td style={{ fontWeight: 800, fontSize: 15 }}>{Number(r.stock_total).toLocaleString()}</td>
+                    <td style={{ color: 'var(--status-success)', fontWeight: 700 }}>{Number(r.stock_liberado).toLocaleString()}</td>
+                    <td style={{ color: 'var(--status-danger)', fontWeight: 700 }}>{Number(r.stock_retenido).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+
+        case 7:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Fecha y Hora</th>
+                  <th>Tipo</th>
+                  <th>Bodega Fiscal</th>
+                  <th>Mercancía / Producto</th>
+                  <th>Cantidad</th>
+                  <th>Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{r.fecha}</td>
+                    <td><Badge status={r.tipo} /></td>
+                    <td style={{ fontWeight: 600 }}>{r.bodega}</td>
+                    <td>{r.producto}</td>
+                    <td style={{ fontWeight: 800 }}>{Number(r.cantidad).toLocaleString()}</td>
+                    <td>{r.motivo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+
+        case 8:
+          return (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Agente Aduanal</th>
+                  <th>Licencia</th>
+                  <th>Total Trámites</th>
+                  <th>DUAs Liberadas</th>
+                  <th>DUAs Retenidas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 700 }}>{r.agente}</td>
+                    <td><span className="table-code-badge">{r.licencia}</span></td>
+                    <td style={{ fontWeight: 800, fontSize: 15 }}>{r.total_tramites}</td>
+                    <td style={{ color: 'var(--status-success)', fontWeight: 700 }}>{r.duas_liberadas}</td>
+                    <td style={{ color: 'var(--status-danger)', fontWeight: 700 }}>{r.duas_retenidas}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+
+        default:
+          return (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
+              Selecciona una consulta del listado para visualizar los resultados.
+            </div>
+          );
       }
     }
+
+    // Fallback de demostración si la API no estuviera disponible
+    return (
+      <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
+        <p>No se encontraron registros devueltos por la consulta.</p>
+      </div>
+    );
   };
 
   return (
@@ -295,9 +425,11 @@ export default function InformesPage() {
                 <div>
                   <div className="card-title" style={{ fontSize: 15 }}>
                     <Code2 size={17} style={{ color: 'var(--primary)' }} />
-                    <span>Sentencia SQL Parametrizada (PostgreSQL)</span>
+                    <span>Sentencia SQL Ejecutada en PostgreSQL</span>
                   </div>
-                  <div className="card-subtitle">Estructura SQL validada para base de datos y agente n8n</div>
+                  <div className="card-subtitle">
+                    {liveResult?.sql ? 'Consulta SQL enviada en tiempo real al motor de base de datos' : 'Estructura SQL definida para el laboratorio'}
+                  </div>
                 </div>
 
                 <button onClick={handleCopySQL} className="btn btn-secondary btn-sm">
@@ -308,7 +440,7 @@ export default function InformesPage() {
 
               <div style={{ padding: 16, backgroundColor: '#0f172a', borderRadius: '0 0 var(--radius-lg) var(--radius-lg)', overflowX: 'auto' }}>
                 <pre style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: 12.5, color: '#f8fafc', lineHeight: 1.5 }}>
-                  {selectedConsulta.sqlQuery}
+                  {currentSQL.trim()}
                 </pre>
               </div>
             </div>
@@ -317,13 +449,31 @@ export default function InformesPage() {
           {/* Tabla de Resultados */}
           <div className="card">
             <div className="card-header">
-              <div className="card-title" style={{ fontSize: 15 }}>
-                <BarChart3 size={17} style={{ color: 'var(--primary)' }} />
-                <span>Resultados Obtenidos</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div className="card-title" style={{ fontSize: 15 }}>
+                  <BarChart3 size={17} style={{ color: 'var(--primary)' }} />
+                  <span>Resultados Obtenidos</span>
+                </div>
+                {liveResult && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '3px 8px',
+                    borderRadius: 99,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    backgroundColor: 'rgba(22, 163, 74, 0.1)',
+                    color: 'var(--status-success)'
+                  }}>
+                    <Database size={11} /> PostgreSQL ({liveResult.rows?.length || 0} registros)
+                  </span>
+                )}
               </div>
               <button
-                onClick={() => showToast('Exportación de datos generada exitosamente')}
+                onClick={handleExportCSV}
                 className="btn btn-secondary btn-sm"
+                disabled={loading || !liveResult?.rows?.length}
               >
                 <Download size={14} />
                 <span>Exportar CSV</span>
