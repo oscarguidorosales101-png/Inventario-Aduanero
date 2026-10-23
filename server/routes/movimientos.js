@@ -62,12 +62,19 @@ router.post('/', async (req, res, next) => {
 
     await client.query('BEGIN');
 
+    // Determinar id_inventario
+    let id_inv = req.body.id_inventario;
+    if (!id_inv) {
+      const invCheck = await client.query('SELECT id_inventario FROM inventario_bodega WHERE id_bodega = $1 AND id_mercancia = $2', [id_bodega, id_mercancia]);
+      if (invCheck.rows.length > 0) id_inv = invCheck.rows[0].id_inventario;
+    }
+
     // 1. Insertar movimiento
     const movRes = await client.query(
-      `INSERT INTO movimiento_inventario (tipo, cantidad, id_mercancia, id_bodega, motivo)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO movimiento_inventario (id_inventario, tipo, cantidad, id_mercancia, id_bodega, fecha, motivo)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6)
        RETURNING *;`,
-      [tipo, cantidad, id_mercancia, id_bodega, motivo || `Movimiento de ${tipo}`]
+      [id_inv || 1, tipo, cantidad, id_mercancia, id_bodega, motivo || `Movimiento de ${tipo}`]
     );
 
     // 2. Ajustar existencias en inventario_bodega

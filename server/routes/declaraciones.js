@@ -10,15 +10,19 @@ router.get('/', async (req, res, next) => {
     let sql = `
       SELECT
         d.id_declaracion,
-        d.numero_declaracion,
+        COALESCE(d.numero_dua, d.numero_declaracion) AS numero_dua,
+        COALESCE(d.numero_dua, d.numero_declaracion) AS numero_declaracion,
         TO_CHAR(d.fecha, 'YYYY-MM-DD') AS fecha,
         d.regimen,
         d.estado,
         d.id_importador,
         d.id_agente,
-        d.id_pais_origen,
-        i.nombre_razon_social AS importador_nombre,
-        i.nit_ruc AS importador_nit,
+        COALESCE(d.id_pais, d.id_pais_origen) AS id_pais,
+        COALESCE(d.id_pais, d.id_pais_origen) AS id_pais_origen,
+        COALESCE(i.razon_social, i.nombre_razon_social) AS razon_social,
+        COALESCE(i.razon_social, i.nombre_razon_social) AS importador_nombre,
+        COALESCE(i.identificacion, i.nit_ruc) AS identificacion,
+        COALESCE(i.identificacion, i.nit_ruc) AS importador_nit,
         a.nombre AS agente_nombre,
         a.licencia AS agente_licencia,
         p.nombre AS pais_nombre,
@@ -26,7 +30,7 @@ router.get('/', async (req, res, next) => {
       FROM declaracion_aduanera d
       JOIN importador i ON d.id_importador = i.id_importador
       JOIN agente_aduanal a ON d.id_agente = a.id_agente
-      JOIN pais p ON d.id_pais_origen = p.id_pais
+      JOIN pais p ON COALESCE(d.id_pais, d.id_pais_origen) = p.id_pais
       WHERE 1=1
     `;
     const params = [];
@@ -122,9 +126,11 @@ router.get('/:id', async (req, res, next) => {
 // POST /api/declaraciones
 router.post('/', async (req, res, next) => {
   try {
-    const { numero_declaracion, fecha, regimen, estado, id_importador, id_agente, id_pais_origen } = req.body;
+    const duaNumber = req.body.numero_dua || req.body.numero_declaracion;
+    const countryId = req.body.id_pais || req.body.id_pais_origen;
+    const { fecha, regimen, estado, id_importador, id_agente } = req.body;
 
-    if (!numero_declaracion || !fecha || !regimen || !id_importador || !id_agente || !id_pais_origen) {
+    if (!duaNumber || !fecha || !regimen || !id_importador || !id_agente || !countryId) {
       return res.status(400).json({ error: 'Todos los campos obligatorios deben ser proporcionados' });
     }
 
@@ -135,10 +141,10 @@ router.post('/', async (req, res, next) => {
 
     const result = await query(
       `INSERT INTO declaracion_aduanera
-       (numero_declaracion, fecha, regimen, estado, id_importador, id_agente, id_pais_origen)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (numero_declaracion, numero_dua, fecha, regimen, estado, id_importador, id_agente, id_pais_origen, id_pais)
+       VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $7)
        RETURNING *;`,
-      [numero_declaracion, fecha, regimen, estado || 'Retenida', id_importador, id_agente, id_pais_origen]
+      [duaNumber, fecha, regimen, estado || 'Retenida', id_importador, id_agente, countryId]
     );
 
     res.status(201).json(result.rows[0]);

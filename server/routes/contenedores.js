@@ -10,18 +10,22 @@ router.get('/', async (req, res, next) => {
     let sql = `
       SELECT
         c.id_contenedor,
+        COALESCE(c.codigo, c.numero_contenedor) AS codigo,
         c.numero_contenedor,
         c.tipo,
+        COALESCE(c.peso_kg, c.peso) AS peso_kg,
         c.peso,
         c.id_declaracion,
+        COALESCE(d.numero_dua, d.numero_declaracion) AS numero_dua,
         d.numero_declaracion,
         d.estado AS declaracion_estado,
+        COALESCE(i.razon_social, i.nombre_razon_social) AS razon_social,
         i.nombre_razon_social AS importador_nombre,
         p.nombre AS pais_origen
       FROM contenedor c
       JOIN declaracion_aduanera d ON c.id_declaracion = d.id_declaracion
       JOIN importador i ON d.id_importador = i.id_importador
-      JOIN pais p ON d.id_pais_origen = p.id_pais
+      JOIN pais p ON COALESCE(d.id_pais, d.id_pais_origen) = p.id_pais
       WHERE 1=1
     `;
     const params = [];

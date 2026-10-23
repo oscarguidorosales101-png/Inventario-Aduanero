@@ -6,7 +6,20 @@ const router = Router();
 // GET /api/entidades/importadores
 router.get('/importadores', async (req, res, next) => {
   try {
-    const { rows } = await query('SELECT * FROM importador ORDER BY nombre_razon_social ASC;');
+    const { rows } = await query(`
+      SELECT
+        id_importador,
+        COALESCE(razon_social, nombre_razon_social) AS razon_social,
+        COALESCE(razon_social, nombre_razon_social) AS nombre_razon_social,
+        COALESCE(identificacion, nit_ruc) AS identificacion,
+        COALESCE(identificacion, nit_ruc) AS nit_ruc,
+        id_pais,
+        direccion,
+        telefono,
+        correo
+      FROM importador
+      ORDER BY 2 ASC;
+    `);
     res.json(rows);
   } catch (err) {
     next(err);

@@ -22,24 +22,70 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Configuración de CORS segura
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173,http://localhost:5174')
+// Configuración de CORS segura para desarrollo y producción
+const allowedOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:3000')
   .split(',')
   .map(o => o.trim());
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Permitir solicitudes sin origin (como postman, curl o server-to-server) o si coincide
-    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-      callback(null, true);
-    } else {
-      callback(new Error('Bloqueado por política CORS'));
+    // Permitir solicitudes sin origin (como postman, curl o server-to-server)
+    if (!origin) return callback(null, true);
+
+    // Permitir cualquier puerto en localhost o 127.0.0.1
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      return callback(null, true);
     }
+
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+
+    callback(null, false);
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 app.use(express.json());
+
+// Ruta raíz informativa del servicio REST
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Sistema de Inventario Aduanero — API REST',
+    version: '1.0.0',
+    status: 'online',
+    environment: process.env.NODE_ENV || 'development',
+    database: {
+      engine: 'PostgreSQL 17',
+      name: process.env.DB_NAME || 'aduana',
+      status: 'connected'
+    },
+    documentation: 'Endpoints normalizados organizados bajo el prefijo /api',
+    healthCheck: '/api/health',
+    endpoints: {
+      health: '/api/health',
+      declaraciones: '/api/declaraciones',
+      mercancias: '/api/mercancias',
+      categorias: '/api/categorias',
+      inventario: '/api/inventario',
+      movimientos: '/api/movimientos',
+      bodegas: '/api/bodegas',
+      contenedores: '/api/contenedores',
+      inspecciones: '/api/inspecciones',
+      entidades: {
+        importadores: '/api/entidades/importadores',
+        agentes: '/api/entidades/agentes',
+        paises: '/api/entidades/paises',
+        funcionarios: '/api/entidades/funcionarios'
+      },
+      informes: '/api/informes/:id (1 al 8)',
+      asistente_ia: '/api/ai/chat'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Montaje de rutas
 app.use('/api/health', healthRoutes);

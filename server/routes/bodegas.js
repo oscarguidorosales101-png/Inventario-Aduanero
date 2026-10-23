@@ -10,12 +10,13 @@ router.get('/', async (req, res, next) => {
       SELECT
         b.id_bodega,
         b.nombre,
+        COALESCE(b.tipo, 'Fiscal') AS tipo,
         b.ubicacion,
         b.capacidad,
         COALESCE(SUM(ib.cantidad), 0) AS stock_total
       FROM bodega b
       LEFT JOIN inventario_bodega ib ON b.id_bodega = ib.id_bodega
-      GROUP BY b.id_bodega, b.nombre, b.ubicacion, b.capacidad
+      GROUP BY b.id_bodega, b.nombre, b.tipo, b.ubicacion, b.capacidad
       ORDER BY b.id_bodega ASC;
     `);
     res.json(rows);

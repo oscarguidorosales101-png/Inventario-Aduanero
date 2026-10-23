@@ -27,16 +27,19 @@ router.post('/chat', async (req, res) => {
 
   const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL || 'http://localhost:5678/webhook/aduanas-ai';
 
-  // 1. Intentar enviar al Webhook de n8n
+  // 1. Ejecutar el Webhook de producción de n8n
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 segundos para inferencia de LLM
+
+    console.log(`[AI Route] Enviando pregunta a n8n: "${question.trim()}" -> ${n8nWebhookUrl}`);
 
     const n8nRes = await fetch(n8nWebhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         question: question.trim(),
+        message: question.trim(),
         history: history || [],
         timestamp: new Date().toISOString()
       }),
@@ -46,16 +49,37 @@ router.post('/chat', async (req, res) => {
     clearTimeout(timeoutId);
 
     if (n8nRes.ok) {
-      const n8nData = await n8nRes.json();
+      let n8nData = await n8nRes.json().catch(() => null);
+      if (Array.isArray(n8nData)) {
+        n8nData = n8nData[0] || {};
+      }
+
+      const answer = n8nData?.answer || n8nData?.output || n8nData?.text || n8nData?.message || (typeof n8nData === 'string' ? n8nData : 'Respuesta procesada por n8n.');
+      let sqlQuery = n8nData?.sqlQuery || n8nData?.sql || n8nData?.query || null;
+
+      // Si el texto incluye un bloque ```sql ... ```, extraerlo para mostrarlo en la tarjeta de traza SQL
+      if (!sqlQuery && typeof answer === 'string') {
+        const sqlMatch = answer.match(/```sql\s*([\s\S]*?)\s*```/i);
+        if (sqlMatch && sqlMatch[1]) {
+          sqlQuery = sqlMatch[1].trim();
+        }
+      }
+
+      const source = n8nData?.source || 'n8n Workflow (Producción) + Google Gemini';
+
+      console.log(`[AI Route] Respuesta recibida exitosamente desde n8n (${source})`);
+
       return res.json({
-        answer: n8nData.output || n8nData.answer || n8nData.text || 'Respuesta recibida de n8n.',
-        sqlQuery: n8nData.sqlQuery || null,
-        data: n8nData.data || null,
-        source: 'n8n Workflow + Gemini'
+        answer,
+        sqlQuery,
+        data: n8nData?.data || null,
+        source
       });
+    } else {
+      console.warn(`[AI Route] Webhook de n8n respondió con HTTP ${n8nRes.status}.`);
     }
-  } catch {
-    // n8n no está en ejecución o el webhook no está activo aún
+  } catch (n8nErr) {
+    console.warn(`[AI Route] Excepción comunicándose con n8n (${n8nErr.message}).`);
   }
 
   // 2. Si n8n no está disponible o está en configuración, consultar directamente con el rol de solo lectura
